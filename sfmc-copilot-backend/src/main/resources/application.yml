@@ -1,0 +1,39 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: sfmc-copilot-backend
+
+  # ======== Ollama Configuration (Local LLM) ========
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.2
+          temperature: 0.7
+          num-predict: 2048
+
+# ======== Google Gemini Configuration ========
+# Get a free API key at https://aistudio.google.com/apikey
+gemini:
+  api-key: ${GEMINI_API_KEY:}
+  model: gemini-2.5-flash
+
+# ======== Logging ========
+logging:
+  level:
+    com.sfmc.copilot: DEBUG
+    org.springframework.ai: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# ======== SFMC API Configuration ========
+sfmc:
+  auth:
+    client-id: ${SFMC_CLIENT_ID:}
+    client-secret: ${SFMC_CLIENT_SECRET:}
+    base-uri: ${SFMC_AUTH_BASE_URI:}
+  api:
+    rest-base-uri: ${SFMC_REST_BASE_URI:}
