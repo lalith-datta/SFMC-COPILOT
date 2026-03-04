@@ -59,13 +59,13 @@ public class AiGatewayService {
      * System prompt used to extract structured DE parameters from natural language.
      */
     private static final String DE_PARSER_PROMPT = """
-            You are a JSON parser. Extract the Data Extension name, folder, and fields from the user's request.
+            You are a JSON parser. Extract the Data Extension name, categoryId, and fields from the user's request.
             Respond ONLY with valid JSON, no markdown, no explanation.
 
             Format:
             {
               "name": "DataExtensionName",
-              "folderName": "FolderName or null if not specified",
+              "categoryId": 0,
               "fields": [
                 {"name": "FieldName", "type": "Text", "isPrimaryKey": true, "isRequired": true, "maxLength": 254},
                 {"name": "AnotherField", "type": "EmailAddress", "isPrimaryKey": false, "isRequired": true}
@@ -79,8 +79,8 @@ public class AiGatewayService {
             - If the user doesn't specify a primary key, make the first field the primary key
             - If the user doesn't specify a field type, default to Text
             - For Text fields, default maxLength to 254
-            - If the user mentions a folder or location (e.g. "in Lalith folder"), extract the folder name
-            - If no folder is mentioned, set folderName to null
+            - If the user provides a numeric categoryId or folder ID, set it in categoryId
+            - If no categoryId is mentioned, set categoryId to 0
             - Respond ONLY with the JSON object, nothing else
             """;
 
@@ -206,7 +206,7 @@ public class AiGatewayService {
 
             // Step 2: Parse the JSON response
             String deName;
-            String folderName = null;
+            long categoryId = 0;
             List<Map<String, Object>> fields;
 
             if (parsedJson != null) {
@@ -216,11 +216,9 @@ public class AiGatewayService {
                 JsonNode root = objectMapper.readTree(parsedJson);
                 deName = root.get("name").asText();
 
-                // Extract folder name if provided
-                if (root.has("folderName") && !root.get("folderName").isNull()) {
-                    folderName = root.get("folderName").asText();
-                    if ("null".equalsIgnoreCase(folderName))
-                        folderName = null;
+                // Extract categoryId if provided
+                if (root.has("categoryId")) {
+                    categoryId = root.get("categoryId").asLong(0);
                 }
 
                 fields = new ArrayList<>();
@@ -248,8 +246,8 @@ public class AiGatewayService {
             }
 
             // Step 3: Actually create the Data Extension via SFMC API
-            log.info("Creating Data Extension '{}' with {} fields in folder '{}'", deName, fields.size(), folderName);
-            String result = sfmcApiService.createDataExtension(deName, fields, folderName);
+            log.info("Creating Data Extension '{}' with {} fields, categoryId={}", deName, fields.size(), categoryId);
+            String result = sfmcApiService.createDataExtension(deName, fields, categoryId);
 
             return "SFMC_CREATE_DE_RESULT:\n" + result;
 
