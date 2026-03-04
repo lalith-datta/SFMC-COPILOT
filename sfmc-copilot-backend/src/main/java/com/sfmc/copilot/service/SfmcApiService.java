@@ -55,142 +55,15 @@ public class SfmcApiService {
     // ==================== DATA EXTENSIONS ====================
 
     /**
-     * Derive the SOAP API URL from the REST base URI.
-     * REST: https://mc...rest.marketingcloudapis.com
-     * SOAP: https://mc...soap.marketingcloudapis.com/Service.asmx
-     */
-    private String getSoapUri() {
-        String base = getBaseUri();
-        return base.replace(".rest.marketingcloudapis.com", ".soap.marketingcloudapis.com")
-                + "/Service.asmx";
-    }
-
-    /**
-     * Look up a Data Extension folder's categoryId by name using the SOAP API.
-     * The SFMC REST API does NOT expose DE folders — only SOAP can retrieve them.
+     * Discover a valid categoryId from any existing DE in the account.
+     * Used as a fallback when the user doesn't provide one.
      *
-     * @param folderName Name of the folder to look up
-     * @return The categoryId, or -1 if not found
-     */
-    public long lookupFolderIdViaSoap(String folderName) {
-        if (isDemoMode())
-            return -1;
-
-        try {
-            String soapUrl = getSoapUri();
-            String token = authService.getAccessToken();
-
-            // Build SOAP envelope to retrieve DataFolder by Name
-            String soapBody = """
-                    <?xml version="1.0" encoding="UTF-8"?>
-                    <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-                                xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-                                xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
-                        <s:Header>
-                            <a:Action s:mustUnderstand="1">Retrieve</a:Action>
-                            <a:To s:mustUnderstand="1">%s</a:To>
-                            <fueloauth xmlns="http://exacttarget.com">%s</fueloauth>
-                        </s:Header>
-                        <s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                                xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-                            <RetrieveRequestMsg xmlns="http://exacttarget.com/wsdl/partnerAPI">
-                                <RetrieveRequest>
-                                    <ObjectType>DataFolder</ObjectType>
-                                    <Properties>ID</Properties>
-                                    <Properties>Name</Properties>
-                                    <Properties>ContentType</Properties>
-                                    <Filter xsi:type="SimpleFilterPart">
-                                        <Property>Name</Property>
-                                        <SimpleOperator>equals</SimpleOperator>
-                                        <Value>%s</Value>
-                                    </Filter>
-                                </RetrieveRequest>
-                            </RetrieveRequestMsg>
-                        </s:Body>
-                    </s:Envelope>
-                    """
-                    .formatted(soapUrl, token, folderName);
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.TEXT_XML);
-            headers.set("SOAPAction", "Retrieve");
-
-            HttpEntity<String> request = new HttpEntity<>(soapBody, headers);
-            log.info("Looking up folder '{}' via SOAP API...", folderName);
-            ResponseEntity<String> response = restTemplate.exchange(
-                    soapUrl, HttpMethod.POST, request, String.class);
-
-            String responseBody = response.getBody();
-            log.debug("SOAP response: {}", responseBody);
-
-            // Parse the ID from the SOAP XML response
-            // Look for <ID>...</ID> inside <Results> where ContentType is "dataextension"
-            if (responseBody != null && responseBody.contains("<ID>")) {
-                // Find all Results blocks and look for dataextension ContentType
-                int searchFrom = 0;
-                while (true) {
-                    int resultsStart = responseBody.indexOf("<Results>", searchFrom);
-                    if (resultsStart == -1)
-                        break;
-                    int resultsEnd = responseBody.indexOf("</Results>", resultsStart);
-                    if (resultsEnd == -1)
-                        break;
-
-                    String resultBlock = responseBody.substring(resultsStart, resultsEnd);
-                    searchFrom = resultsEnd + 1;
-
-                    // Check if this is a dataextension folder
-                    if (resultBlock.contains("dataextension") || resultBlock.contains("DataExtension")) {
-                        int idStart = resultBlock.indexOf("<ID>") + 4;
-                        int idEnd = resultBlock.indexOf("</ID>");
-                        if (idStart > 3 && idEnd > idStart) {
-                            long id = Long.parseLong(resultBlock.substring(idStart, idEnd).trim());
-                            log.info("Found folder '{}' with categoryId: {} (ContentType: dataextension)", folderName,
-                                    id);
-                            return id;
-                        }
-                    }
-                }
-
-                // If no dataextension-specific folder found, take the first ID
-                int idStart = responseBody.indexOf("<ID>") + 4;
-                int idEnd = responseBody.indexOf("</ID>");
-                if (idStart > 3 && idEnd > idStart) {
-                    long id = Long.parseLong(responseBody.substring(idStart, idEnd).trim());
-                    log.info("Found folder '{}' with categoryId: {} (first match)", folderName, id);
-                    return id;
-                }
-            }
-
-            log.warn("Folder '{}' not found via SOAP API", folderName);
-            return -1;
-
-        } catch (Exception e) {
-            log.warn("SOAP folder lookup failed for '{}': {}", folderName, e.getMessage());
-            return -1;
-        }
-    }
-
-    /**
-     * Auto-discover a valid categoryId.
-     * 1. If a folderName is provided, look it up via SOAP API.
-     * 2. Otherwise, grab categoryId from any existing DE in the account.
-     *
-     * @param folderName Optional folder name (can be null)
      * @return A valid categoryId, or -1 if none found
      */
-    private long discoverCategoryId(String folderName) {
-        // Try SOAP lookup first if a folder name is given
-        if (folderName != null && !folderName.isBlank()) {
-            long id = lookupFolderIdViaSoap(folderName);
-            if (id > 0)
-                return id;
-        }
-
-        // Fallback: grab categoryId from any existing DE
+    private long discoverCategoryId() {
         try {
             String url = getBaseUri() + "/data/v1/customobjects?$pageSize=1";
-            log.info("Falling back: fetching categoryId from any existing DE...");
+            log.info("Auto-discovering categoryId from existing DEs...");
             String response = callSfmcApi(url, HttpMethod.GET, null);
 
             JsonNode root = objectMapper.readTree(response);
@@ -212,16 +85,14 @@ public class SfmcApiService {
     }
 
     /**
-     * Create a Data Extension with the given name, fields, and target folder.
-     * Discovers the categoryId via SOAP API if a folder name is given,
-     * otherwise falls back to an existing DE's categoryId.
+     * Create a Data Extension with the given name, fields, and categoryId.
      *
      * @param name       Name of the Data Extension
      * @param fields     List of field definitions
-     * @param folderName Target folder name (optional, can be null)
+     * @param categoryId Folder category ID (0 = auto-discover from existing DEs)
      * @return JSON string result of the operation
      */
-    public String createDataExtension(String name, List<Map<String, Object>> fields, String folderName) {
+    public String createDataExtension(String name, List<Map<String, Object>> fields, long categoryId) {
         if (isDemoMode()) {
             return demoCreateDataExtension(name, fields);
         }
@@ -233,11 +104,11 @@ public class SfmcApiService {
             payload.put("name", name);
             payload.put("customerKey", name.replaceAll("\\s+", "_"));
 
-            // Auto-discover categoryId (via SOAP if folder name given, else from existing
-            // DEs)
-            long categoryId = discoverCategoryId(folderName);
-            if (categoryId > 0) {
-                payload.put("categoryId", categoryId);
+            // Use provided categoryId, or auto-discover from existing DEs
+            long effectiveCategoryId = categoryId > 0 ? categoryId : discoverCategoryId();
+            if (effectiveCategoryId > 0) {
+                payload.put("categoryId", effectiveCategoryId);
+                log.info("Using categoryId: {} for DE '{}'", effectiveCategoryId, name);
             }
 
             ArrayNode columns = payload.putArray("fields");
@@ -311,10 +182,10 @@ public class SfmcApiService {
     }
 
     /**
-     * Backward-compatible overload without folder name.
+     * Backward-compatible overload without categoryId — auto-discovers.
      */
     public String createDataExtension(String name, List<Map<String, Object>> fields) {
-        return createDataExtension(name, fields, (String) null);
+        return createDataExtension(name, fields, 0);
     }
 
     /**
