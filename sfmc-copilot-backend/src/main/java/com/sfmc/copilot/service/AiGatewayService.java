@@ -59,13 +59,15 @@ public class AiGatewayService {
      * System prompt used to extract structured DE parameters from natural language.
      */
     private static final String DE_PARSER_PROMPT = """
-            You are a JSON parser. Extract the Data Extension name, categoryId, and fields from the user's request.
+            You are a JSON parser. Extract the Data Extension details from the user's request.
             Respond ONLY with valid JSON, no markdown, no explanation.
 
             Format:
             {
               "name": "DataExtensionName",
               "categoryId": 0,
+              "isSendable": false,
+              "sendableFieldName": null,
               "fields": [
                 {"name": "FieldName", "type": "Text", "isPrimaryKey": true, "isRequired": true, "maxLength": 254},
                 {"name": "AnotherField", "type": "EmailAddress", "isPrimaryKey": false, "isRequired": true}
@@ -80,7 +82,10 @@ public class AiGatewayService {
             - If the user doesn't specify a field type, default to Text
             - For Text fields, default maxLength to 254
             - If the user provides a numeric categoryId or folder ID, set it in categoryId
-            - If no categoryId is mentioned, set categoryId to 0
+            - If no categoryId is mentioned, set categoryId to 70553
+            - If the user says "sendable" or "send relationship", set isSendable to true
+            - When isSendable is true, set sendableFieldName to the field that relates to subscribers (e.g. "SubscriberKey")
+            - If no sendable field is specified but isSendable is true, set sendableFieldName to the primary key field name
             - Respond ONLY with the JSON object, nothing else
             """;
 
@@ -207,6 +212,8 @@ public class AiGatewayService {
             // Step 2: Parse the JSON response
             String deName;
             long categoryId = 0;
+            boolean isSendable = false;
+            String sendableFieldName = null;
             List<Map<String, Object>> fields;
 
             if (parsedJson != null) {
@@ -219,6 +226,16 @@ public class AiGatewayService {
                 // Extract categoryId if provided
                 if (root.has("categoryId")) {
                     categoryId = root.get("categoryId").asLong(0);
+                }
+
+                // Extract sendable settings
+                if (root.has("isSendable")) {
+                    isSendable = root.get("isSendable").asBoolean(false);
+                }
+                if (root.has("sendableFieldName") && !root.get("sendableFieldName").isNull()) {
+                    sendableFieldName = root.get("sendableFieldName").asText();
+                    if ("null".equalsIgnoreCase(sendableFieldName))
+                        sendableFieldName = null;
                 }
 
                 fields = new ArrayList<>();
@@ -246,8 +263,10 @@ public class AiGatewayService {
             }
 
             // Step 3: Actually create the Data Extension via SFMC API
-            log.info("Creating Data Extension '{}' with {} fields, categoryId={}", deName, fields.size(), categoryId);
-            String result = sfmcApiService.createDataExtension(deName, fields, categoryId);
+            log.info("Creating Data Extension '{}' with {} fields, categoryId={}, sendable={}",
+                    deName, fields.size(), categoryId, isSendable);
+            String result = sfmcApiService.createDataExtension(deName, fields, categoryId, isSendable,
+                    sendableFieldName);
 
             return "SFMC_CREATE_DE_RESULT:\n" + result;
 

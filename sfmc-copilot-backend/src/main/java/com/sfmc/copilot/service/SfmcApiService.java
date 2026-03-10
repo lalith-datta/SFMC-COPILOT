@@ -85,14 +85,20 @@ public class SfmcApiService {
     }
 
     /**
-     * Create a Data Extension with the given name, fields, and categoryId.
+     * Create a Data Extension with the given name, fields, categoryId, and sendable
+     * settings.
      *
-     * @param name       Name of the Data Extension
-     * @param fields     List of field definitions
-     * @param categoryId Folder category ID (0 = auto-discover from existing DEs)
+     * @param name              Name of the Data Extension
+     * @param fields            List of field definitions
+     * @param categoryId        Folder category ID (0 = auto-discover from existing
+     *                          DEs)
+     * @param isSendable        Whether the DE should be sendable
+     * @param sendableFieldName The DE field name to use for the send relationship
+     *                          (e.g. "SubscriberKey")
      * @return JSON string result of the operation
      */
-    public String createDataExtension(String name, List<Map<String, Object>> fields, long categoryId) {
+    public String createDataExtension(String name, List<Map<String, Object>> fields, long categoryId,
+            boolean isSendable, String sendableFieldName) {
         if (isDemoMode()) {
             return demoCreateDataExtension(name, fields);
         }
@@ -109,6 +115,43 @@ public class SfmcApiService {
             if (effectiveCategoryId > 0) {
                 payload.put("categoryId", effectiveCategoryId);
                 log.info("Using categoryId: {} for DE '{}'", effectiveCategoryId, name);
+            }
+
+            // Sendable DE configuration
+            if (isSendable) {
+                payload.put("isSendable", true);
+                payload.put("isTestable", true);
+
+                // Determine which DE field to use for the send relationship
+                String deField = sendableFieldName;
+                if (deField == null || deField.isBlank()) {
+                    // Default: use the first primary key field
+                    for (Map<String, Object> field : fields) {
+                        if (Boolean.TRUE.equals(field.get("isPrimaryKey"))) {
+                            deField = (String) field.get("name");
+                            break;
+                        }
+                    }
+                    if (deField == null && !fields.isEmpty()) {
+                        deField = (String) fields.get(0).get("name");
+                    }
+                }
+
+                if (deField != null) {
+                    // sendableDataExtensionField — the field in this DE for the relationship
+                    // ObjectNode sendableDeField = objectMapper.createObjectNode();
+                    // sendableDeField.put("name", deField);
+                    // sendableDeField.put("fieldType", "Text");
+                    payload.put("sendableCustomObjectField", deField);
+
+                    // sendableSubscriberField — the subscriber attribute to relate to
+                    // ObjectNode sendableSubField = objectMapper.createObjectNode();
+                    // sendableSubField.put("name", "_SubscriberKey");
+                    // sendableSubField.put("referenceType", "CustomerKey");
+                    payload.put("sendableSubscriberField", "_SubscriberKey");
+
+                    log.info("DE '{}' set as sendable with field '{}' → _SubscriberKey", name, deField);
+                }
             }
 
             ArrayNode columns = payload.putArray("fields");
@@ -182,10 +225,10 @@ public class SfmcApiService {
     }
 
     /**
-     * Backward-compatible overload without categoryId — auto-discovers.
+     * Backward-compatible overload without categoryId or sendable settings.
      */
     public String createDataExtension(String name, List<Map<String, Object>> fields) {
-        return createDataExtension(name, fields, 0);
+        return createDataExtension(name, fields, 0, false, null);
     }
 
     /**
